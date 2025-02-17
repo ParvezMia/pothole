@@ -1,0 +1,7 @@
+streamlit
+ultralytics
+opencv-python-headless  # Use headless version to avoid GUI issues
+numpy
+streamlit-webrtc
+av
+Pillow
