@@ -1,4 +1,6 @@
 import streamlit as st
+import gdown
+import os
 from ultralytics import YOLO
 import cv2
 import numpy as np
@@ -16,10 +18,25 @@ st.set_page_config(
 # Title of the app
 st.title("Pothole Detection using YOLOv8")
 
+# Model file path and Google Drive File ID
+MODEL_PATH = "best.pt"
+GDRIVE_FILE_ID = "1myS3kd5KrARwB4fFpWI09V6zFyIiEqV8"  # Your file ID
+
+# Function to download the model from Google Drive if not exists
+def download_model():
+    if not os.path.exists(MODEL_PATH):
+        st.info("Downloading model... This may take a few minutes.")
+        url = f"https://drive.google.com/uc?id={GDRIVE_FILE_ID}"
+        gdown.download(url, MODEL_PATH, quiet=False)
+        st.success("Model downloaded successfully!")
+
+# Ensure model is downloaded
+download_model()
+
 # Load the model
 @st.cache_resource
 def load_model():
-    return YOLO("best.pt")
+    return YOLO(MODEL_PATH)
 
 model = load_model()
 
@@ -78,15 +95,14 @@ class VideoProcessor(VideoProcessorBase):
         
         return av.VideoFrame.from_ndarray(result_img, format="bgr24")
 
-# Create the main app layout
+# Sidebar settings
 st.sidebar.title("Settings")
 confidence_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.5, 0.05)
 
-# Live camera feed with automatic continuous detection
+# Live camera feed
 st.header("Live Pothole Detection")
-st.write("Real-time pothole detection will automatically highlight detected potholes with red circles.")
+st.write("Real-time pothole detection will highlight detected potholes with red circles.")
 
-# WebRTC configuration for accessing the camera
 rtc_configuration = RTCConfiguration(
     {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 )
@@ -100,35 +116,31 @@ webrtc_ctx = webrtc_streamer(
 )
 
 if webrtc_ctx.state.playing:
-    st.info("The camera is active. Point it towards roads to detect potholes. Potholes will be automatically highlighted with red circles.")
+    st.info("Camera is active. Point it at roads to detect potholes.")
 
 # Instructions
 st.markdown("""
 ### Instructions:
 1. Allow camera access when prompted
-2. Point your device camera at roads to detect potholes
-3. Red circles will appear around detected potholes in real-time
-4. Adjust the confidence threshold in the sidebar to control detection sensitivity
+2. Point your camera at roads to detect potholes
+3. Red circles will appear around detected potholes
+4. Adjust confidence threshold in the sidebar for detection sensitivity
 """)
 
-# Additional features section
-with st.expander("Additional Features"):
+# Image upload detection
+with st.expander("Upload Image for Detection"):
     st.subheader("Upload an Image")
     uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
     
     if uploaded_file is not None:
-        # Process the uploaded image
         image = Image.open(uploaded_file).convert("RGB")
         image_np = np.array(image)
         
-        # Add a button to run detection
         if st.button("Detect Potholes"):
             with st.spinner("Processing image..."):
-                # Run detection
                 results = model(image_np, conf=confidence_threshold)
                 result_image = draw_circles(image_np, results[0])
                 
-                # Display results
                 col1, col2 = st.columns(2)
                 with col1:
                     st.subheader("Original Image")
@@ -137,11 +149,10 @@ with st.expander("Additional Features"):
                     st.subheader("Detection Results")
                     st.image(result_image, use_column_width=True)
                 
-                # Get and display detection information
                 if len(results[0].boxes) > 0:
                     st.success(f"Detected {len(results[0].boxes)} pothole(s)")
                 else:
-                    st.info("No potholes detected in this image.")
+                    st.info("No potholes detected.")
 
 # About section
 with st.expander("About this App"):
@@ -158,7 +169,6 @@ with st.expander("About this App"):
     #### How it works:
     The model continuously processes each frame from your camera feed to detect potholes.
     When a pothole is detected, a red circle is drawn around it with the confidence score.
-    The detection happens automatically without requiring any user interaction.
     
     #### Use cases:
     - Road maintenance planning
