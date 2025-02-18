@@ -2,10 +2,11 @@ import streamlit as st
 import os
 import cv2
 import numpy as np
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration, WebRtcMode
 import av
 from PIL import Image
 import logging
+import socket
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -30,6 +31,10 @@ def load_model():
     except Exception as e:
         st.error(f"Failed to load model: {e}")
         return None
+
+# Initialize session state variables
+if 'webrtc_failed_attempts' not in st.session_state:
+    st.session_state.webrtc_failed_attempts = 0
 
 model = load_model()
 
@@ -103,14 +108,36 @@ confidence_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.5, 
 st.header("Live Pothole Detection")
 st.write("Real-time pothole detection will automatically highlight detected potholes with red circles.")
 
-# Modified WebRTC configuration with multiple STUN servers and more error handling
+# Network diagnostics option
+if st.sidebar.checkbox("Enable Network Diagnostics"):
+    if st.sidebar.button("Test WebRTC Connectivity"):
+        st.sidebar.info("Testing STUN server connectivity...")
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(2)
+            s.connect(("stun.l.google.com", 19302))
+            s.close()
+            st.sidebar.success("STUN connectivity test passed!")
+        except Exception as e:
+            st.sidebar.error(f"STUN connectivity test failed: {e}")
+            st.sidebar.warning("You may need to try a different network or use the image upload feature.")
+
+# Improved WebRTC configuration with STUN and TURN servers
+# Note: Replace placeholder TURN credentials with actual ones
 rtc_configuration = RTCConfiguration(
     {
         "iceServers": [
-            {"urls": ["stun:stun.l.google.com:19302"]},
-            {"urls": ["stun:stun1.l.google.com:19302"]},
-            {"urls": ["stun:stun2.l.google.com:19302"]},
-        ]
+            {"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]},
+            # Uncomment and fill in with actual TURN server credentials
+            # {
+            #     "urls": "turn:your-turn-server.com:443?transport=tcp",
+            #     "username": "your-username",
+            #     "credential": "your-password"
+            # }
+        ],
+        "iceTransportPolicy": "all",
+        "bundlePolicy": "max-bundle",
+        "sdpSemantics": "unified-plan",
     }
 )
 
@@ -122,10 +149,20 @@ try:
         rtc_configuration=rtc_configuration,
         media_stream_constraints={"video": True, "audio": False},
         async_processing=True,
+        mode=WebRtcMode.SENDRECV,  # This ensures bidirectional communication
     )
 
     if webrtc_ctx.state.playing:
         st.info("The camera is active. Point it towards roads to detect potholes. Potholes will be automatically highlighted with red circles.")
+    elif webrtc_ctx.state.failed:
+        st.session_state.webrtc_failed_attempts += 1
+        st.error("WebRTC connection failed. This may be due to network restrictions or browser compatibility.")
+        
+        if st.session_state.webrtc_failed_attempts > 1:
+            st.warning("Multiple connection attempts have failed. Please try a different browser, network, or use the image upload feature below.")
+        else:
+            st.warning("Please try refreshing the page or use a different browser (Chrome or Firefox recommended).")
+
 except Exception as e:
     st.error(f"WebRTC connection error: {e}")
     st.warning("Unable to establish camera connection. This might be due to network restrictions or firewall settings.")
@@ -216,6 +253,7 @@ with st.expander("Troubleshooting"):
     - Ensure you've given camera permissions in your browser
     - Try a different browser (Chrome or Firefox recommended)
     - If on a corporate network, firewall settings might block WebRTC connections
+    - Use the network diagnostics in the sidebar to test connectivity
     
     #### Model Loading Errors
     - Refresh the page to reload the model
@@ -224,4 +262,28 @@ with st.expander("Troubleshooting"):
     #### Performance Issues
     - For mobile devices, ensure good lighting conditions
     - Keep the device steady while detecting potholes
+    
+    #### Cloud Deployment Issues
+    - WebRTC requires special configuration in cloud environments
+    - If you're deploying on Streamlit Cloud and still having issues after using this code:
+      1. Contact Streamlit support to verify WebRTC is fully supported
+      2. Consider using a free TURN server provider like Twilio or OpenRelay
+      3. If all else fails, you can remove the WebRTC component and focus on the image upload feature
+    """)
+
+# Update requirements.txt section at the bottom
+with st.expander("Technical Information"):
+    st.write("""
+    ### Recommended Requirements (for best compatibility):
+    ```
+    streamlit==1.28.0
+    streamlit-webrtc==0.47.0
+    opencv-python-headless==4.8.0.74
+    numpy==1.24.3
+    ultralytics==8.0.145
+    av==10.0.0
+    pydub==0.25.1
+    aiortc==1.5.0
+    aioice==0.9.0
+    ```
     """)
