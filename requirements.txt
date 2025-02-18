@@ -1,13 +1,8 @@
 streamlit
-torch
-gdown
-opencv-python-headless
-aioice
-aiortc
 ultralytics
-opencv-python-headless  # Use headless OpenCV for cloud environments
+opencv-python-headless  # Use headless version to avoid GUI issues
 numpy
-gdown
 streamlit-webrtc
 av
-pillow
+Pillow
+aiortc
