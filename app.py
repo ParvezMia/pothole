@@ -1,10 +1,14 @@
 import streamlit as st
-from ultralytics import YOLO
+import os
 import cv2
 import numpy as np
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 import av
 from PIL import Image
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 
 # Set page configuration
 st.set_page_config(
@@ -16,10 +20,16 @@ st.set_page_config(
 # Title of the app
 st.title("Pothole Detection using YOLOv8")
 
-# Load the model
+# Fix for torch.classes error - import YOLO after setting environment variable
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 @st.cache_resource
 def load_model():
-    return YOLO("best.pt")
+    try:
+        from ultralytics import YOLO
+        return YOLO("best.pt")
+    except Exception as e:
+        st.error(f"Failed to load model: {e}")
+        return None
 
 model = load_model()
 
@@ -27,7 +37,7 @@ model = load_model()
 def draw_circles(image, results):
     annotated_img = image.copy()
 
-    if len(results.boxes) > 0:
+    if results and len(results.boxes) > 0:
         for box in results.boxes:
             # Get box coordinates
             x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -68,15 +78,22 @@ class VideoProcessor(VideoProcessorBase):
         self.confidence = confidence
 
     def recv(self, frame):
-        img = frame.to_ndarray(format="bgr24")
+        try:
+            img = frame.to_ndarray(format="bgr24")
 
-        # Process the frame with the model
-        results = self.model(img, conf=self.confidence)
-
-        # Draw circles around detected potholes
-        result_img = draw_circles(img, results[0])
-
-        return av.VideoFrame.from_ndarray(result_img, format="bgr24")
+            # Process the frame with the model
+            if self.model:
+                results = self.model(img, conf=self.confidence)
+                # Draw circles around detected potholes
+                result_img = draw_circles(img, results[0])
+            else:
+                result_img = img
+                
+            return av.VideoFrame.from_ndarray(result_img, format="bgr24")
+        except Exception as e:
+            logging.error(f"Error in video processing: {e}")
+            # Return original frame if there's an error
+            return frame
 
 # Create the main app layout
 st.sidebar.title("Settings")
@@ -86,33 +103,48 @@ confidence_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.5, 
 st.header("Live Pothole Detection")
 st.write("Real-time pothole detection will automatically highlight detected potholes with red circles.")
 
-# WebRTC configuration for accessing the camera
+# Modified WebRTC configuration with multiple STUN servers and more error handling
 rtc_configuration = RTCConfiguration(
-    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    {
+        "iceServers": [
+            {"urls": ["stun:stun.l.google.com:19302"]},
+            {"urls": ["stun:stun1.l.google.com:19302"]},
+            {"urls": ["stun:stun2.l.google.com:19302"]},
+        ]
+    }
 )
 
-webrtc_ctx = webrtc_streamer(
-    key="pothole-detection",
-    video_processor_factory=lambda: VideoProcessor(model, confidence_threshold),
-    rtc_configuration=rtc_configuration,
-    media_stream_constraints={"video": True, "audio": False},
-    async_processing=True,  # Enable async processing for smoother video
-)
+# Enable fallback option for connection issues
+try:
+    webrtc_ctx = webrtc_streamer(
+        key="pothole-detection",
+        video_processor_factory=lambda: VideoProcessor(model, confidence_threshold),
+        rtc_configuration=rtc_configuration,
+        media_stream_constraints={"video": True, "audio": False},
+        async_processing=True,
+    )
 
-if webrtc_ctx.state.playing:
-    st.info("The camera is active. Point it towards roads to detect potholes. Potholes will be automatically highlighted with red circles.")
+    if webrtc_ctx.state.playing:
+        st.info("The camera is active. Point it towards roads to detect potholes. Potholes will be automatically highlighted with red circles.")
+except Exception as e:
+    st.error(f"WebRTC connection error: {e}")
+    st.warning("Unable to establish camera connection. This might be due to network restrictions or firewall settings.")
+    
+    # Fallback to image upload only
+    st.info("You can still use the image upload feature below.")
 
-# Instructions
+# Instructions section
 st.markdown("""
 ### Instructions:
 1. Allow camera access when prompted
 2. Point your device camera at roads to detect potholes
 3. Red circles will appear around detected potholes in real-time
 4. Adjust the confidence threshold in the sidebar to control detection sensitivity
+5. If camera connection fails, try refreshing or use the image upload feature
 """)
 
-# Additional features section
-with st.expander("Additional Features"):
+# Additional features section - Image upload
+with st.expander("Upload Image for Detection", expanded=True):
     st.subheader("Upload an Image")
     uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
 
@@ -123,25 +155,28 @@ with st.expander("Additional Features"):
 
         # Add a button to run detection
         if st.button("Detect Potholes"):
-            with st.spinner("Processing image..."):
-                # Run detection
-                results = model(image_np, conf=confidence_threshold)
-                result_image = draw_circles(image_np, results[0])
+            if model:
+                with st.spinner("Processing image..."):
+                    # Run detection
+                    results = model(image_np, conf=confidence_threshold)
+                    result_image = draw_circles(image_np, results[0])
 
-                # Display results
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.subheader("Original Image")
-                    st.image(image, use_column_width=True)
-                with col2:
-                    st.subheader("Detection Results")
-                    st.image(result_image, use_column_width=True)
+                    # Display results
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.subheader("Original Image")
+                        st.image(image, use_column_width=True)
+                    with col2:
+                        st.subheader("Detection Results")
+                        st.image(result_image, use_column_width=True)
 
-                # Get and display detection information
-                if len(results[0].boxes) > 0:
-                    st.success(f"Detected {len(results[0].boxes)} pothole(s)")
-                else:
-                    st.info("No potholes detected in this image.")
+                    # Get and display detection information
+                    if len(results[0].boxes) > 0:
+                        st.success(f"Detected {len(results[0].boxes)} pothole(s)")
+                    else:
+                        st.info("No potholes detected in this image.")
+            else:
+                st.error("Model failed to load. Please try refreshing the page.")
                     
 # About section
 with st.expander("About this App"):
@@ -154,6 +189,7 @@ with st.expander("About this App"):
     - Circular highlighting of detected potholes
     - Confidence scores for each detection
     - Adjustable confidence threshold for detection sensitivity
+    - Fallback to image upload if camera connection fails
     
     #### How it works:
     The model continuously processes each frame from your camera feed to detect potholes.
@@ -166,6 +202,26 @@ with st.expander("About this App"):
     - Research on road quality assessment
     """)
 
-# Footer
+# Handle errors explicitly and provide troubleshooting info
 st.markdown("---")
 st.markdown("Powered by YOLOv8 | Created with Streamlit")
+
+# Add troubleshooting section
+with st.expander("Troubleshooting"):
+    st.write("""
+    ### Common Issues:
+    
+    #### Camera Connection Errors
+    - Try refreshing the page
+    - Ensure you've given camera permissions in your browser
+    - Try a different browser (Chrome or Firefox recommended)
+    - If on a corporate network, firewall settings might block WebRTC connections
+    
+    #### Model Loading Errors
+    - Refresh the page to reload the model
+    - If persistent, try clearing your browser cache
+    
+    #### Performance Issues
+    - For mobile devices, ensure good lighting conditions
+    - Keep the device steady while detecting potholes
+    """)
