@@ -6,3 +6,4 @@ streamlit-webrtc
 av
 Pillow
 aiortc
+aioice
